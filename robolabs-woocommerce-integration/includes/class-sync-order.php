@@ -62,7 +62,7 @@ final class RoboLabs_WC_Sync_Order {
 
 			$invoice_payload = $this->mappers->build_invoice_payload( $order, $partner_id, $line_items );
 
-			$existing = $this->find_invoice_by_external_id( $invoice_payload['external_id'] );
+			$existing = $this->find_invoice_by_external_id( $invoice_payload['order_number'] );
 			if ( $existing ) {
 				$this->update_order_invoice_meta( $order, $existing );
 				return;
@@ -89,7 +89,7 @@ final class RoboLabs_WC_Sync_Order {
 			$invoice_id = $data['id'] ?? null;
 			if ( $invoice_id ) {
 				$this->confirm_invoice( (int) $invoice_id );
-				$this->update_order_invoice_meta( $order, array( 'id' => $invoice_id, 'external_id' => $invoice_payload['external_id'] ) );
+				$this->update_order_invoice_meta( $order, array( 'id' => $invoice_id, 'external_id' => $invoice_payload['order_number'] ) );
 			}
 		} finally {
 			$this->release_lock( $order_id );
@@ -205,10 +205,10 @@ final class RoboLabs_WC_Sync_Order {
 		}
 
 		$payload = array(
-			'external_id' => 'EWCSHIP',
-			'name'        => __( 'Shipping', 'robolabs-woocommerce' ),
-			'sku'         => 'WC-SHIPPING',
-			'categ_id'    => $this->settings->get( 'categ_id' ),
+			'default_code' => 'EWCSHIP',
+			'name'         => __( 'Shipping', 'robolabs-woocommerce' ),
+			'sku'          => 'WC-SHIPPING',
+			'categ_id'     => $this->settings->get( 'categ_id' ),
 		);
 
 		$existing = $this->find_product_by_external_id( 'EWCSHIP', 'WC-SHIPPING' );
@@ -240,8 +240,9 @@ final class RoboLabs_WC_Sync_Order {
 	}
 
 	private function update_order_invoice_meta( WC_Order $order, array $invoice ): void {
+		$external_id = $invoice['external_id'] ?? $this->mappers->invoice_external_id( $order->get_id() );
 		$order->update_meta_data( '_robolabs_invoice_id', $invoice['id'] ?? '' );
-		$order->update_meta_data( '_robolabs_invoice_external_id', $invoice['external_id'] ?? '' );
+		$order->update_meta_data( '_robolabs_invoice_external_id', $external_id );
 		$order->update_meta_data( '_robolabs_sync_status', 'synced' );
 		$order->update_meta_data( '_robolabs_last_sync_at', gmdate( 'c' ) );
 		$order->save();
@@ -280,7 +281,7 @@ final class RoboLabs_WC_Sync_Order {
 	}
 
 	private function find_partner_by_external_id( string $external_id, string $email ): ?array {
-		$response = $this->api_client->get( 'partner/find', array( 'external_id' => $external_id ) );
+		$response = $this->api_client->get( 'partner/find', array( 'code' => $external_id ) );
 		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
 			return $response['data']['data'][0];
 		}
@@ -296,7 +297,7 @@ final class RoboLabs_WC_Sync_Order {
 	}
 
 	private function find_product_by_external_id( string $external_id, string $sku ): ?array {
-		$response = $this->api_client->get( 'product/find', array( 'external_id' => $external_id ) );
+		$response = $this->api_client->get( 'product/find', array( 'default_code' => $external_id ) );
 		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
 			return $response['data']['data'][0];
 		}
@@ -312,7 +313,7 @@ final class RoboLabs_WC_Sync_Order {
 	}
 
 	private function find_invoice_by_external_id( string $external_id ): ?array {
-		$response = $this->api_client->get( 'invoice/find', array( 'external_id' => $external_id ) );
+		$response = $this->api_client->get( 'invoice/find', array( 'order_number' => $external_id ) );
 		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
 			return $response['data']['data'][0];
 		}
