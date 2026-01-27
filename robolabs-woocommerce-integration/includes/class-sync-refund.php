@@ -72,7 +72,7 @@ final class RoboLabs_WC_Sync_Refund {
 		}
 
 		$credit_payload = $this->mappers->build_credit_payload( $order, $partner_id, $line_items, $refund_id );
-		$existing = $this->find_invoice_by_external_id( $credit_payload['external_id'] );
+		$existing = $this->find_invoice_by_external_id( $credit_payload['order_number'] );
 		if ( ! $existing ) {
 			$response = $this->api_client->post( 'invoice', $credit_payload );
 			if ( ! $response['success'] ) {
@@ -168,7 +168,7 @@ final class RoboLabs_WC_Sync_Refund {
 	}
 
 	private function find_invoice_by_external_id( string $external_id ): ?array {
-		$response = $this->api_client->get( 'invoice/find', array( 'external_id' => $external_id ) );
+		$response = $this->api_client->get( 'invoice/find', array( 'order_number' => $external_id ) );
 		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
 			return $response['data']['data'][0];
 		}

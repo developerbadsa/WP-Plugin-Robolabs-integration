@@ -93,10 +93,16 @@ final class RoboLabs_WC_Settings {
 
 	public function sanitize( array $settings ): array {
 		$clean = array();
+		$existing = $this->get_settings();
 
 		$clean['base_url_mode']       = sanitize_text_field( $settings['base_url_mode'] ?? 'sandbox' );
 		$clean['base_url_custom']     = esc_url_raw( $settings['base_url_custom'] ?? '' );
-		$clean['api_key']             = sanitize_text_field( $settings['api_key'] ?? '' );
+		if ( defined( 'ROBOLABS_API_KEY' ) && ROBOLABS_API_KEY ) {
+			$clean['api_key'] = $existing['api_key'] ?? '';
+		} else {
+			$submitted_key = sanitize_text_field( $settings['api_key'] ?? '' );
+			$clean['api_key'] = '' !== $submitted_key ? $submitted_key : ( $existing['api_key'] ?? '' );
+		}
 		$clean['language']            = sanitize_text_field( $settings['language'] ?? 'en_US' );
 		$clean['execute_immediately'] = isset( $settings['execute_immediately'] ) ? 'yes' : 'no';
 		$clean['journal_id']          = sanitize_text_field( $settings['journal_id'] ?? '' );

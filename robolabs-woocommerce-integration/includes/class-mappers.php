@@ -15,7 +15,7 @@ final class RoboLabs_WC_Mappers {
 		$billing = $order->get_address( 'billing' );
 		$email   = $order->get_billing_email();
 		return array(
-			'external_id' => $this->partner_external_id( $order ),
+			'code'        => $this->partner_external_id( $order ),
 			'name'        => trim( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ),
 			'email'       => $email,
 			'phone'       => $order->get_billing_phone(),
@@ -31,7 +31,7 @@ final class RoboLabs_WC_Mappers {
 
 	public function build_product_payload( WC_Product $product ): array {
 		return array(
-			'external_id' => $this->product_external_id( $product->get_id() ),
+			'default_code' => $this->product_external_id( $product->get_id() ),
 			'name'        => $product->get_name(),
 			'sku'         => $product->get_sku(),
 			'categ_id'    => $this->settings->get( 'categ_id' ),
@@ -40,8 +40,8 @@ final class RoboLabs_WC_Mappers {
 
 	public function build_invoice_payload( WC_Order $order, int $partner_id, array $line_items ): array {
 		$payload = array(
-			'external_id'  => $this->invoice_external_id( $order->get_id() ),
 			'number'       => $order->get_order_number(),
+			'order_number' => $this->invoice_external_id( $order->get_id() ),
 			'currency'     => $order->get_currency(),
 			'invoice_type' => $this->settings->get( 'invoice_type' ),
 			'journal_id'   => $this->settings->get( 'journal_id' ),
@@ -54,8 +54,8 @@ final class RoboLabs_WC_Mappers {
 
 	public function build_credit_payload( WC_Order $order, int $partner_id, array $line_items, int $refund_id ): array {
 		return array(
-			'external_id'  => $this->credit_external_id( $order->get_id(), $refund_id ),
 			'number'       => $order->get_order_number() . '-CR',
+			'order_number' => $this->credit_external_id( $order->get_id(), $refund_id ),
 			'currency'     => $order->get_currency(),
 			'invoice_type' => $this->settings->get( 'credit_invoice_type' ),
 			'journal_id'   => $this->settings->get( 'journal_id' ),

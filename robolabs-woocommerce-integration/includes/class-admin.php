@@ -94,13 +94,28 @@ final class RoboLabs_WC_Admin {
 		check_admin_referer( 'robolabs_test_connection' );
 
 		$client = new RoboLabs_WC_Api_Client( $this->settings, $this->logger );
-		$response = $client->get( 'journal/find' );
+		$endpoint = 'journal/find';
+		$response = $client->get( $endpoint );
+		$this->logger->info(
+			'RoboLabs test connection executed',
+			array(
+				'endpoint' => $endpoint,
+				'base_url' => $this->settings->get_base_url(),
+				'code'     => $response['code'] ?? null,
+				'error'    => $response['error'] ?? null,
+				'data'     => $response['data'] ?? null,
+			)
+		);
 		if ( $response['success'] ) {
 			wp_safe_redirect( add_query_arg( 'robolabs_notice', 'success', admin_url( 'admin.php?page=robolabs-woocommerce' ) ) );
 			exit;
 		}
 
-		$notice = urlencode( $response['error'] ?? 'Connection failed' );
+		$details = $response['error'] ?? 'Connection failed';
+		if ( isset( $response['code'] ) ) {
+			$details = sprintf( 'HTTP %d: %s', (int) $response['code'], $details );
+		}
+		$notice = urlencode( $details );
 		wp_safe_redirect( add_query_arg( array( 'robolabs_notice' => 'error', 'robolabs_error' => $notice ), admin_url( 'admin.php?page=robolabs-woocommerce' ) ) );
 		exit;
 	}
