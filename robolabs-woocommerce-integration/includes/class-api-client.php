@@ -33,18 +33,24 @@ final class RoboLabs_WC_Api_Client {
 		}
 
 		$headers = array(
-			'Content-Type'       => 'application/json',
-			'Authorization'      => 'X-API-key ' . $this->settings->get_api_key(),
-			'ACCEPT-LANGUAGE'    => $this->settings->get( 'language', 'en_US' ),
+			'Authorization'       => 'X-API-key ' . $this->settings->get_api_key(),
+			'ACCEPT-LANGUAGE'     => $this->settings->get( 'language', 'en_US' ),
 			'EXECUTE_IMMEDIATELY' => $this->settings->is_execute_immediately() ? 'true' : 'false',
 		);
+
+		$has_body = ! empty( $body ) && in_array( $method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true );
+		if ( $has_body ) {
+			$headers['Content-Type'] = 'application/json';
+		}
 
 		$args = array(
 			'timeout' => 20,
 			'headers' => $headers,
-			'body'    => $body ? wp_json_encode( $body ) : null,
 			'method'  => $method,
 		);
+		if ( $has_body ) {
+			$args['body'] = wp_json_encode( $body );
+		}
 
 		$masked_headers = $headers;
 		$masked_headers['Authorization'] = 'X-API-key ****';
