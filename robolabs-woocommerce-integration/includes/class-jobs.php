@@ -100,7 +100,7 @@ final class RoboLabs_WC_Jobs {
 		}
 
 		$data = $response['data'] ?? array();
-		if ( isset( $data['status'] ) && 'completed' !== $data['status'] ) {
+		if ( ! $this->is_job_complete( $data ) ) {
 			if ( function_exists( 'as_enqueue_async_action' ) ) {
 				as_enqueue_async_action( 'robolabs_poll_job', array( 'job_id' => $job_id, 'context' => $context ), 'robolabs' );
 				$this->logger->info( 'Job not completed, re-enqueued', array( 'job_id' => $job_id ) );
@@ -108,9 +108,60 @@ final class RoboLabs_WC_Jobs {
 			return;
 		}
 
-		if ( isset( $context['order_id'] ) && isset( $data['result']['invoice_id'] ) ) {
-			update_post_meta( (int) $context['order_id'], '_robolabs_invoice_id', sanitize_text_field( $data['result']['invoice_id'] ) );
-			update_post_meta( (int) $context['order_id'], '_robolabs_job_id', '' );
+		if ( isset( $context['order_id'] ) ) {
+			$invoice_id = $this->extract_invoice_id( $data );
+			if ( $invoice_id ) {
+				update_post_meta( (int) $context['order_id'], '_robolabs_invoice_id', sanitize_text_field( $invoice_id ) );
+				update_post_meta( (int) $context['order_id'], '_robolabs_job_id', '' );
+			}
 		}
+	}
+
+	private function is_job_complete( array $data ): bool {
+		if ( isset( $data['status'] ) ) {
+			return 'completed' === $data['status'];
+		}
+
+		if ( isset( $data['state'] ) && is_array( $data['state'] ) ) {
+			$state = array_map( 'strtolower', $data['state'] );
+			return (bool) array_intersect( $state, array( 'done', 'completed', 'success' ) );
+		}
+
+		return false;
+	}
+
+	private function extract_invoice_id( array $data ): ?string {
+		if ( isset( $data['result']['invoice_id'] ) ) {
+			return (string) $data['result']['invoice_id'];
+		}
+
+		if ( isset( $data['response_data'] ) ) {
+			$parsed = $this->parse_response_data( $data['response_data'] );
+			if ( isset( $parsed['invoice_id'] ) ) {
+				return (string) $parsed['invoice_id'];
+			}
+			if ( isset( $parsed['id'] ) ) {
+				return (string) $parsed['id'];
+			}
+		}
+
+		return null;
+	}
+
+	private function parse_response_data( $response_data ): array {
+		if ( is_array( $response_data ) ) {
+			return $response_data;
+		}
+
+		if ( is_string( $response_data ) && '' !== $response_data ) {
+			$normalized = trim( $response_data );
+			$normalized = str_replace( "'", '"', $normalized );
+			$decoded = json_decode( $normalized, true );
+			if ( is_array( $decoded ) ) {
+				return $decoded;
+			}
+		}
+
+		return array();
 	}
 }

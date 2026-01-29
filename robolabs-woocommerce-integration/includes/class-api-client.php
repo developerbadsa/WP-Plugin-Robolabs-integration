@@ -38,6 +38,7 @@ final class RoboLabs_WC_Api_Client {
 			'ACCEPT-LANGUAGE'     => $this->settings->get( 'language', 'en_US' ),
 			'EXECUTE_IMMEDIATELY' => $this->settings->is_execute_immediately() ? 'true' : 'false',
 		);
+		unset( $headers['Authorization'] );
 
 		$has_body = ! empty( $body ) && in_array( $method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true );
 		if ( $has_body ) {
@@ -84,9 +85,10 @@ final class RoboLabs_WC_Api_Client {
 		}
 
 		if ( $code >= 400 ) {
+			$error_message = $this->extract_error_message( $data, $body_raw );
 			return array(
 				'success' => false,
-				'error'   => $data['message'] ?? $body_raw,
+				'error'   => $error_message,
 				'code'    => $code,
 				'data'    => $data,
 			);
@@ -97,5 +99,21 @@ final class RoboLabs_WC_Api_Client {
 			'code'    => $code,
 			'data'    => $data,
 		);
+	}
+
+	private function extract_error_message( $data, string $body_raw ): string {
+		if ( is_array( $data ) ) {
+			if ( isset( $data['error']['message'] ) ) {
+				return (string) $data['error']['message'];
+			}
+			if ( isset( $data['message'] ) ) {
+				return (string) $data['message'];
+			}
+			if ( isset( $data['result'] ) && is_string( $data['result'] ) ) {
+				return $data['result'];
+			}
+		}
+
+		return $body_raw;
 	}
 }

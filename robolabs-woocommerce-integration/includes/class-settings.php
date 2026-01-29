@@ -16,8 +16,8 @@ final class RoboLabs_WC_Settings {
 		'journal_id'          => '',
 		'categ_id'            => '',
 		'invoice_trigger'     => 'order_created',
-		'invoice_type'        => 'sales',
-		'credit_invoice_type' => 'credit',
+		'invoice_type'        => 'out_invoice',
+		'credit_invoice_type' => 'out_refund',
 		'tax_mode'            => 'robo_decide',
 		'log_level'           => 'yes',
 		'max_attempts'        => 4,
@@ -108,8 +108,8 @@ final class RoboLabs_WC_Settings {
 		$clean['journal_id']          = sanitize_text_field( $settings['journal_id'] ?? '' );
 		$clean['categ_id']            = sanitize_text_field( $settings['categ_id'] ?? '' );
 		$clean['invoice_trigger']     = sanitize_text_field( $settings['invoice_trigger'] ?? 'order_created' );
-		$clean['invoice_type']        = sanitize_text_field( $settings['invoice_type'] ?? 'sales' );
-		$clean['credit_invoice_type'] = sanitize_text_field( $settings['credit_invoice_type'] ?? 'credit' );
+		$clean['invoice_type']        = sanitize_text_field( $settings['invoice_type'] ?? 'out_invoice' );
+		$clean['credit_invoice_type'] = sanitize_text_field( $settings['credit_invoice_type'] ?? 'out_refund' );
 		$clean['tax_mode']            = sanitize_text_field( $settings['tax_mode'] ?? 'robo_decide' );
 		$clean['log_level']           = isset( $settings['log_level'] ) ? 'yes' : 'no';
 		$clean['max_attempts']        = absint( $settings['max_attempts'] ?? 4 );
