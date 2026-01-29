@@ -94,8 +94,14 @@ final class RoboLabs_WC_Admin {
 		check_admin_referer( 'robolabs_test_connection' );
 
 		$client = new RoboLabs_WC_Api_Client( $this->settings, $this->logger );
-		$endpoint = 'journal/find';
-		$response = $client->get( $endpoint );
+		$endpoint = 'aClassCode/find';
+		$response = $client->get(
+			$endpoint,
+			array(
+				'limit'  => 1,
+				'offset' => 0,
+			)
+		);
 		$this->logger->info(
 			'RoboLabs test connection executed',
 			array(
