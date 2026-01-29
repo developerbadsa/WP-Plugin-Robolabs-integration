@@ -43,6 +43,10 @@ final class RoboLabs_WC_Sync_Order {
 			$this->last_error_code = null;
 			$partner_id = $this->ensure_partner( $order );
 			if ( ! $partner_id ) {
+				if ( in_array( $this->last_error_code, array( 401, 403 ), true ) ) {
+					$this->mark_failed( $order, 'API credentials are invalid or missing permissions' );
+					return;
+				}
 				if ( $this->maybe_schedule_retry( $order, $this->last_error_code ) ) {
 					return;
 				}
@@ -62,14 +66,37 @@ final class RoboLabs_WC_Sync_Order {
 
 			$invoice_payload = $this->mappers->build_invoice_payload( $order, $partner_id, $line_items );
 
-			$existing = $this->find_invoice_by_external_id( $invoice_payload['order_number'] );
+			$existing = $this->find_invoice_by_identifiers(
+				array(
+					'order_number' => $invoice_payload['order_number'],
+					'number'       => $invoice_payload['number'],
+					'reference'    => $invoice_payload['order_number'],
+				)
+			);
 			if ( $existing ) {
 				$this->update_order_invoice_meta( $order, $existing );
 				return;
 			}
 
+			$this->logger->info(
+				'Prepared invoice payload',
+				array(
+					'order_id'     => $order->get_id(),
+					'order_number' => $invoice_payload['order_number'] ?? '',
+					'number'       => $invoice_payload['number'] ?? '',
+					'partner_id'   => $invoice_payload['partner_id'] ?? null,
+					'subtotal'     => $invoice_payload['subtotal'] ?? null,
+					'tax'          => $invoice_payload['tax'] ?? null,
+					'total'        => $invoice_payload['total'] ?? null,
+					'lines_count'  => isset( $invoice_payload['invoice_lines'] ) ? count( $invoice_payload['invoice_lines'] ) : 0,
+				)
+			);
 			$response = $this->api_client->post( 'invoice', $invoice_payload );
 			if ( ! $response['success'] ) {
+				if ( in_array( $response['code'] ?? null, array( 401, 403 ), true ) ) {
+					$this->mark_failed( $order, 'API credentials are invalid or missing permissions' );
+					return;
+				}
 				if ( $this->maybe_schedule_retry( $order, $response['code'] ?? null ) ) {
 					return;
 				}
@@ -88,8 +115,11 @@ final class RoboLabs_WC_Sync_Order {
 
 			$invoice_id = $data['id'] ?? null;
 			if ( $invoice_id ) {
-				$this->confirm_invoice( (int) $invoice_id );
-				$this->update_order_invoice_meta( $order, array( 'id' => $invoice_id, 'external_id' => $invoice_payload['order_number'] ) );
+				if ( $this->confirm_invoice( (int) $invoice_id, $order ) ) {
+					$this->update_order_invoice_meta( $order, array( 'id' => $invoice_id, 'external_id' => $invoice_payload['order_number'] ) );
+				} else {
+					$this->mark_failed( $order, 'Invoice confirm failed' );
+				}
 			}
 		} finally {
 			$this->release_lock( $order_id );
@@ -114,7 +144,17 @@ final class RoboLabs_WC_Sync_Order {
 			return (int) $existing['id'];
 		}
 
-		$response = $this->api_client->post( 'partner', $this->mappers->build_partner_payload( $order ) );
+		$partner_payload = $this->mappers->build_partner_payload( $order );
+		$this->logger->info(
+			'Prepared partner payload',
+			array(
+				'order_id'   => $order->get_id(),
+				'name'       => $partner_payload['name'] ?? '',
+				'email_set'  => ! empty( $partner_payload['email'] ),
+				'is_company' => $partner_payload['is_company'] ?? false,
+			)
+		);
+		$response = $this->api_client->post( 'partner', $partner_payload );
 		if ( ! $response['success'] ) {
 			$this->last_error_code = $response['code'] ?? null;
 			$this->logger->error( 'Partner create failed', array( 'order_id' => $order->get_id(), 'error' => $response['error'] ?? 'unknown' ) );
@@ -157,9 +197,14 @@ final class RoboLabs_WC_Sync_Order {
 			}
 		}
 
-		$discount_line = $this->mappers->build_discount_line( $order );
-		if ( $discount_line ) {
-			$lines[] = $discount_line;
+		if ( $order->get_discount_total() > 0 ) {
+			$discount_product_id = $this->ensure_discount_product();
+			if ( $discount_product_id ) {
+				$discount_line = $this->mappers->build_discount_line( $order, $discount_product_id );
+				if ( $discount_line ) {
+					$lines[] = $discount_line;
+				}
+			}
 		}
 
 		return $lines;
@@ -172,7 +217,7 @@ final class RoboLabs_WC_Sync_Order {
 		}
 
 		$external_id = $this->mappers->product_external_id( $product->get_id() );
-		$existing = $this->find_product_by_external_id( $external_id, $product->get_sku() );
+		$existing = $this->find_product_by_external_id( $external_id );
 		if ( $existing ) {
 			$product->update_meta_data( '_robolabs_product_id', $existing['id'] );
 			$product->update_meta_data( '_robolabs_product_external_id', $external_id );
@@ -207,11 +252,10 @@ final class RoboLabs_WC_Sync_Order {
 		$payload = array(
 			'default_code' => 'EWCSHIP',
 			'name'         => __( 'Shipping', 'robolabs-woocommerce' ),
-			'sku'          => 'WC-SHIPPING',
 			'categ_id'     => $this->settings->get( 'categ_id' ),
 		);
 
-		$existing = $this->find_product_by_external_id( 'EWCSHIP', 'WC-SHIPPING' );
+		$existing = $this->find_product_by_external_id( 'EWCSHIP' );
 		if ( $existing ) {
 			update_option( 'robolabs_wc_shipping_product_id', (int) $existing['id'] );
 			return (int) $existing['id'];
@@ -232,11 +276,18 @@ final class RoboLabs_WC_Sync_Order {
 		return null;
 	}
 
-	private function confirm_invoice( int $invoice_id ): void {
-		$response = $this->api_client->post( 'invoice/' . $invoice_id . '/confirm' );
+	private function confirm_invoice( int $invoice_id, WC_Order $order ): bool {
+		$payload = array(
+			'subtotal' => wc_format_decimal( (float) $order->get_subtotal(), 2 ),
+			'tax'      => wc_format_decimal( (float) $order->get_total_tax(), 2 ),
+			'total'    => wc_format_decimal( (float) $order->get_total(), 2 ),
+		);
+		$response = $this->api_client->post( 'invoice/' . $invoice_id . '/confirm', $payload );
 		if ( ! $response['success'] ) {
 			$this->logger->warning( 'Invoice confirm failed', array( 'invoice_id' => $invoice_id, 'error' => $response['error'] ?? 'unknown' ) );
+			return false;
 		}
+		return true;
 	}
 
 	private function update_order_invoice_meta( WC_Order $order, array $invoice ): void {
@@ -249,11 +300,45 @@ final class RoboLabs_WC_Sync_Order {
 		$order->add_order_note( sprintf( __( 'RoboLabs invoice synced: %s', 'robolabs-woocommerce' ), $invoice['id'] ?? '' ) );
 	}
 
+	private function ensure_discount_product(): ?int {
+		$stored = (int) get_option( 'robolabs_wc_discount_product_id', 0 );
+		if ( $stored ) {
+			return $stored;
+		}
+
+		$payload = array(
+			'default_code' => 'EWCDISC',
+			'name'         => __( 'Discount', 'robolabs-woocommerce' ),
+			'categ_id'     => $this->settings->get( 'categ_id' ),
+		);
+
+		$existing = $this->find_product_by_external_id( 'EWCDISC' );
+		if ( $existing ) {
+			update_option( 'robolabs_wc_discount_product_id', (int) $existing['id'] );
+			return (int) $existing['id'];
+		}
+
+		$response = $this->api_client->post( 'product', $payload );
+		if ( ! $response['success'] ) {
+			$this->logger->warning( 'Discount product create failed', array( 'error' => $response['error'] ?? 'unknown' ) );
+			return null;
+		}
+
+		$data = $response['data'] ?? array();
+		if ( isset( $data['id'] ) ) {
+			update_option( 'robolabs_wc_discount_product_id', (int) $data['id'] );
+			return (int) $data['id'];
+		}
+
+		return null;
+	}
+
 	private function mark_failed( WC_Order $order, string $message ): void {
 		$order->update_meta_data( '_robolabs_sync_status', 'failed' );
 		$order->update_meta_data( '_robolabs_last_error', sanitize_text_field( $message ) );
 		$order->update_meta_data( '_robolabs_last_sync_at', gmdate( 'c' ) );
 		$order->save();
+		$order->add_order_note( sprintf( __( 'RoboLabs sync failed: %s', 'robolabs-woocommerce' ), $message ) );
 		$this->logger->error( 'Order sync failed', array( 'order_id' => $order->get_id(), 'error' => $message ) );
 	}
 
@@ -296,26 +381,24 @@ final class RoboLabs_WC_Sync_Order {
 		return null;
 	}
 
-	private function find_product_by_external_id( string $external_id, string $sku ): ?array {
+	private function find_product_by_external_id( string $external_id ): ?array {
 		$response = $this->api_client->get( 'product/find', array( 'default_code' => $external_id ) );
 		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
 			return $response['data']['data'][0];
 		}
 
-		if ( $sku ) {
-			$response = $this->api_client->get( 'product/find', array( 'sku' => $sku ) );
-			if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
-				return $response['data']['data'][0];
-			}
-		}
-
 		return null;
 	}
 
-	private function find_invoice_by_external_id( string $external_id ): ?array {
-		$response = $this->api_client->get( 'invoice/find', array( 'order_number' => $external_id ) );
-		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
-			return $response['data']['data'][0];
+	private function find_invoice_by_identifiers( array $identifiers ): ?array {
+		foreach ( $identifiers as $field => $value ) {
+			if ( ! $value ) {
+				continue;
+			}
+			$response = $this->api_client->get( 'invoice/find', array( $field => $value ) );
+			if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
+				return $response['data']['data'][0];
+			}
 		}
 
 		return null;
