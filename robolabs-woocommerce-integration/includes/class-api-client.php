@@ -33,7 +33,8 @@ final class RoboLabs_WC_Api_Client {
 		}
 
 		$headers = array(
-			'Authorization'       => 'X-API-key ' . $this->settings->get_api_key(),
+			'X-API-KEY'           => $this->settings->get_api_key(),
+			'Accept'              => 'application/json',
 			'ACCEPT-LANGUAGE'     => $this->settings->get( 'language', 'en_US' ),
 			'EXECUTE_IMMEDIATELY' => $this->settings->is_execute_immediately() ? 'true' : 'false',
 		);
@@ -53,7 +54,7 @@ final class RoboLabs_WC_Api_Client {
 		}
 
 		$masked_headers = $headers;
-		$masked_headers['Authorization'] = 'X-API-key ****';
+		$masked_headers['X-API-KEY'] = '****';
 		$this->logger->info( sprintf( 'RoboLabs API request: %s %s', $method, $url ), array( 'headers' => $masked_headers ) );
 
 		$response = wp_remote_request( $url, $args );
