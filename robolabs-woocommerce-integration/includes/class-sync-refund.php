@@ -31,7 +31,13 @@ final class RoboLabs_WC_Sync_Refund {
 
 		$invoice_id = (int) $order->get_meta( '_robolabs_invoice_id', true );
 		if ( ! $invoice_id ) {
-			$invoice = $this->find_invoice_by_external_id( $this->mappers->invoice_external_id( $order_id ) );
+			$invoice = $this->find_invoice_by_identifiers(
+				array(
+					'order_number' => $this->mappers->invoice_external_id( $order_id ),
+					'number'       => $order->get_order_number(),
+					'reference'    => $this->mappers->invoice_external_id( $order_id ),
+				)
+			);
 			if ( $invoice ) {
 				$invoice_id = (int) $invoice['id'];
 			}
@@ -72,7 +78,16 @@ final class RoboLabs_WC_Sync_Refund {
 		}
 
 		$credit_payload = $this->mappers->build_credit_payload( $order, $partner_id, $line_items, $refund_id );
-		$existing = $this->find_invoice_by_external_id( $credit_payload['order_number'] );
+		$credit_payload['subtotal'] = wc_format_decimal( abs( (float) $refund->get_subtotal() ), 2 );
+		$credit_payload['tax'] = wc_format_decimal( abs( (float) $refund->get_total_tax() ), 2 );
+		$credit_payload['total'] = wc_format_decimal( abs( (float) $refund->get_total() ), 2 );
+		$existing = $this->find_invoice_by_identifiers(
+			array(
+				'order_number' => $credit_payload['order_number'],
+				'number'       => $credit_payload['number'],
+				'reference'    => $credit_payload['order_number'],
+			)
+		);
 		if ( ! $existing ) {
 			$response = $this->api_client->post( 'invoice', $credit_payload );
 			if ( ! $response['success'] ) {
@@ -86,7 +101,8 @@ final class RoboLabs_WC_Sync_Refund {
 		}
 
 		if ( isset( $existing['id'] ) ) {
-			$confirm_response = $this->api_client->post( 'invoice/' . (int) $existing['id'] . '/confirm' );
+			$confirm_payload = $this->build_confirm_payload( $refund );
+			$confirm_response = $this->api_client->post( 'invoice/' . (int) $existing['id'] . '/confirm', $confirm_payload );
 			if ( ! $confirm_response['success'] ) {
 				if ( $this->maybe_schedule_retry( $order, $confirm_response['code'] ?? null, $refund_id ) ) {
 					return;
@@ -144,6 +160,18 @@ final class RoboLabs_WC_Sync_Refund {
 		$this->logger->error( 'Refund sync failed', array( 'order_id' => $order->get_id(), 'error' => $message ) );
 	}
 
+	private function build_confirm_payload( WC_Order_Refund $refund ): array {
+		$subtotal = (float) $refund->get_subtotal();
+		$tax      = (float) $refund->get_total_tax();
+		$total    = (float) $refund->get_total();
+
+		return array(
+			'subtotal' => wc_format_decimal( abs( $subtotal ), 2 ),
+			'tax'      => wc_format_decimal( abs( $tax ), 2 ),
+			'total'    => wc_format_decimal( abs( $total ), 2 ),
+		);
+	}
+
 	private function maybe_schedule_retry( WC_Order $order, ?int $code, int $refund_id ): bool {
 		if ( ! $code || ( 429 !== $code && $code < 500 ) ) {
 			return false;
@@ -167,10 +195,15 @@ final class RoboLabs_WC_Sync_Refund {
 		return true;
 	}
 
-	private function find_invoice_by_external_id( string $external_id ): ?array {
-		$response = $this->api_client->get( 'invoice/find', array( 'order_number' => $external_id ) );
-		if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
-			return $response['data']['data'][0];
+	private function find_invoice_by_identifiers( array $identifiers ): ?array {
+		foreach ( $identifiers as $field => $value ) {
+			if ( ! $value ) {
+				continue;
+			}
+			$response = $this->api_client->get( 'invoice/find', array( $field => $value ) );
+			if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
+				return $response['data']['data'][0];
+			}
 		}
 
 		return null;

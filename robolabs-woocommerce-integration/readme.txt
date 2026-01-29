@@ -25,7 +25,7 @@ Required settings:
 - API Key
 - Journal ID
 - Default Product Category ID (categ_id)
-- Invoice type and credit note invoice type
+- Invoice type and credit note invoice type (ex: out_invoice / out_refund)
 
 Optional settings:
 - Trigger rule (order created / payment complete / status processing / status completed)
