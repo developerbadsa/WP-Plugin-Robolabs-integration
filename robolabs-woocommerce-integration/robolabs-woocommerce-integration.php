@@ -17,6 +17,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+add_action(
+	'before_woocommerce_init',
+	static function () {
+		if ( class_exists( '\Automattic\WooCommerce\Utilities\FeaturesUtil' ) ) {
+			\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
+			\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'cart_checkout_blocks', __FILE__, true );
+		}
+	}
+);
+
 if ( ! class_exists( 'RoboLabs_WooCommerce_Integration' ) ) {
 	final class RoboLabs_WooCommerce_Integration {
 		public const VERSION = '1.0.0';
