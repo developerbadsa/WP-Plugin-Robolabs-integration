@@ -24,6 +24,7 @@ final class RoboLabs_WC_Mappers {
 		$is_company = ! empty( $company ) || ! empty( $vat_code );
 		return array(
 			'code'        => $this->partner_external_id( $order ),
+			'external_id' => $this->partner_external_id( $order ),
 			'name'        => $company ?: ( $name_parts ?: $fallback_name ),
 			'email'       => $email,
 			'phone'       => $order->get_billing_phone(),
@@ -36,6 +37,7 @@ final class RoboLabs_WC_Mappers {
 			'customer'    => true,
 			'supplier'    => false,
 			'vat_code'    => $vat_code,
+			'vendor_on_sales_invoice' => false,
 		);
 	}
 
