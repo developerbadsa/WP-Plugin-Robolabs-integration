@@ -195,4 +195,43 @@ final class RoboLabs_WC_Mappers {
 
 		return substr( $code, 0, $length );
 	}
+
+	private function resolve_language_code(): string {
+		$language = (string) $this->settings->get( 'language', 'en_US' );
+		if ( str_starts_with( strtolower( $language ), 'lt' ) ) {
+			return 'LT';
+		}
+
+		return 'EN';
+	}
+
+	private function resolve_vat_code( WC_Order $order ): string {
+		$candidates = array(
+			'vat_number',
+			'_billing_vat',
+			'_billing_vat_number',
+			'billing_vat',
+		);
+
+		foreach ( $candidates as $key ) {
+			$value = $order->get_meta( $key );
+			if ( $value ) {
+				return (string) $value;
+			}
+		}
+
+		return '';
+	}
+
+	private function resolve_fallback_name( string $email ): string {
+		if ( $email ) {
+			$local_part = strstr( $email, '@', true );
+			if ( $local_part ) {
+				return $local_part;
+			}
+			return $email;
+		}
+
+		return __( 'Guest', 'robolabs-woocommerce' );
+	}
 }
