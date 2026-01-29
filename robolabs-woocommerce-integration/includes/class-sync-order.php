@@ -145,6 +145,9 @@ final class RoboLabs_WC_Sync_Order {
 		}
 
 		$partner_payload = $this->mappers->build_partner_payload( $order );
+		if ( empty( $partner_payload['code'] ) || ! preg_match( '/^[A-Z0-9]{1,20}$/', $partner_payload['code'] ) ) {
+			$partner_payload['code'] = $this->mappers->partner_external_id( $order );
+		}
 		$this->logger->info(
 			'Prepared partner payload',
 			array(

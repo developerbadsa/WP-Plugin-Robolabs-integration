@@ -127,24 +127,73 @@ final class RoboLabs_WC_Mappers {
 	}
 
 	public function partner_external_id( WC_Order $order ): string {
-		$user_id = $order->get_user_id();
-		if ( $user_id ) {
-			return 'EWCUSR-' . $user_id;
+		$email = (string) $order->get_billing_email();
+		if ( $email ) {
+			return $this->build_compact_code( 'EWCUSR', strtoupper( md5( $email ) ) );
 		}
 
-		return 'EWCUSR-' . md5( (string) $order->get_billing_email() );
+		return $this->build_compact_code( 'EWCUSR', (string) $order->get_id() );
 	}
 
 	public function product_external_id( int $product_id ): string {
-		return 'EWCPRD-' . $product_id;
+		return $this->build_compact_code( 'EWCPRD', (string) $product_id );
 	}
 
 	public function invoice_external_id( int $order_id ): string {
-		return 'EWCINV-' . $order_id;
+		return $this->build_compact_code( 'EWCINV', (string) $order_id );
 	}
 
 	public function credit_external_id( int $order_id, int $refund_id ): string {
-		return 'EWCREF-' . $order_id . '-' . $refund_id;
+		return $this->build_compact_code( 'EWCREF', $order_id . $refund_id );
+	}
+
+	private function resolve_language_code(): string {
+		$language = (string) $this->settings->get( 'language', 'en_US' );
+		if ( str_starts_with( strtolower( $language ), 'lt' ) ) {
+			return 'LT';
+		}
+
+		return 'EN';
+	}
+
+	private function resolve_vat_code( WC_Order $order ): string {
+		$candidates = array(
+			'vat_number',
+			'_billing_vat',
+			'_billing_vat_number',
+			'billing_vat',
+		);
+
+		foreach ( $candidates as $key ) {
+			$value = $order->get_meta( $key );
+			if ( $value ) {
+				return (string) $value;
+			}
+		}
+
+		return '';
+	}
+
+	private function resolve_fallback_name( string $email ): string {
+		if ( $email ) {
+			$local_part = strstr( $email, '@', true );
+			if ( $local_part ) {
+				return $local_part;
+			}
+			return $email;
+		}
+
+		return __( 'Guest', 'robolabs-woocommerce' );
+	}
+
+	private function build_compact_code( string $prefix, string $raw, int $length = 20 ): string {
+		$prefix = strtoupper( preg_replace( '/[^A-Z0-9]/', '', $prefix ) );
+		$raw = strtoupper( preg_replace( '/[^A-Z0-9]/', '', $raw ) );
+		$max_payload = max( 1, $length - strlen( $prefix ) );
+		$payload = substr( $raw, 0, $max_payload );
+		$code = $prefix . $payload;
+
+		return substr( $code, 0, $length );
 	}
 
 	private function resolve_language_code(): string {
