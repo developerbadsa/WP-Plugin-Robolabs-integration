@@ -9,6 +9,7 @@ final class RoboLabs_WC_Sync_Refund {
 	private RoboLabs_WC_Api_Client $api_client;
 	private RoboLabs_WC_Logger $logger;
 	private RoboLabs_WC_Mappers $mappers;
+	private string $last_error_message = '';
 
 	public function __construct(
 		RoboLabs_WC_Settings $settings,
@@ -31,13 +32,15 @@ final class RoboLabs_WC_Sync_Refund {
 
 		$invoice_id = (int) $order->get_meta( '_robolabs_invoice_id', true );
 		if ( ! $invoice_id ) {
-			$invoice = $this->find_invoice_by_identifiers(
-				array(
-					'order_number' => $this->mappers->invoice_external_id( $order_id ),
-					'number'       => $order->get_order_number(),
-					'reference'    => $this->mappers->invoice_external_id( $order_id ),
-				)
-			);
+			$invoice = $this->find_invoice_by_external_id( $this->mappers->invoice_external_id( $order_id ) );
+			if ( ! $invoice ) {
+				$invoice = $this->find_invoice_by_identifiers(
+					array(
+						'number'    => $order->get_order_number(),
+						'reference' => $order->get_order_number(),
+					)
+				);
+			}
 			if ( $invoice ) {
 				$invoice_id = (int) $invoice['id'];
 			}
@@ -71,25 +74,40 @@ final class RoboLabs_WC_Sync_Refund {
 			return;
 		}
 
+		$this->last_error_message = '';
 		$line_items = $this->build_refund_lines( $refund );
 		if ( empty( $line_items ) ) {
-			$this->mark_manual_required( $order, 'No refund lines found' );
+			$this->mark_manual_required( $order, $this->last_error_message ?: 'No refund lines found' );
 			return;
 		}
 
 		$credit_payload = $this->mappers->build_credit_payload( $order, $partner_id, $line_items, $refund_id );
-		$credit_payload['subtotal'] = wc_format_decimal( abs( (float) $refund->get_subtotal() ), 2 );
-		$credit_payload['tax'] = wc_format_decimal( abs( (float) $refund->get_total_tax() ), 2 );
-		$credit_payload['total'] = wc_format_decimal( abs( (float) $refund->get_total() ), 2 );
-		$existing = $this->find_invoice_by_identifiers(
-			array(
-				'order_number' => $credit_payload['order_number'],
-				'number'       => $credit_payload['number'],
-				'reference'    => $credit_payload['order_number'],
-			)
-		);
+		$credit_amounts = array();
+		if ( ! $this->mappers->line_items_use_gross_prices( $line_items ) ) {
+			$credit_amounts = $this->mappers->calculate_amounts_from_lines(
+				$line_items,
+				abs( (float) $refund->get_total() ),
+				abs( (float) $refund->get_total_tax() )
+			);
+			$credit_payload['subtotal'] = $credit_amounts['subtotal'];
+			$credit_payload['tax'] = $credit_amounts['tax'];
+			$credit_payload['total'] = $credit_amounts['total'];
+		} else {
+			$credit_amounts = array(
+				'total' => wc_format_decimal( abs( (float) $refund->get_total() ), 2 ),
+			);
+		}
+		$existing = $this->find_invoice_by_external_id( (string) ( $credit_payload['external_id'] ?? '' ) );
 		if ( ! $existing ) {
-			$response = $this->api_client->post( 'invoice', $credit_payload );
+			$existing = $this->find_invoice_by_identifiers(
+				array(
+					'number'    => $credit_payload['number'],
+					'reference' => $credit_payload['reference'],
+				)
+			);
+		}
+		if ( ! $existing ) {
+			$response = $this->create_credit_invoice( $credit_payload );
 			if ( ! $response['success'] ) {
 				if ( $this->maybe_schedule_retry( $order, $response['code'] ?? null, $refund_id ) ) {
 					return;
@@ -97,11 +115,11 @@ final class RoboLabs_WC_Sync_Refund {
 				$this->mark_manual_required( $order, $response['error'] ?? 'Credit note create failed' );
 				return;
 			}
-			$existing = $response['data'] ?? array();
+			$existing = $this->api_client->get_result( $response );
 		}
 
 		if ( isset( $existing['id'] ) ) {
-			$confirm_payload = $this->build_confirm_payload( $refund );
+			$confirm_payload = $credit_amounts;
 			$confirm_response = $this->api_client->post( 'invoice/' . (int) $existing['id'] . '/confirm', $confirm_payload );
 			if ( ! $confirm_response['success'] ) {
 				if ( $this->maybe_schedule_retry( $order, $confirm_response['code'] ?? null, $refund_id ) ) {
@@ -135,21 +153,133 @@ final class RoboLabs_WC_Sync_Refund {
 			if ( ! $product_id ) {
 				continue;
 			}
-			$qty = $item->get_quantity();
-			$total = (float) $item->get_total();
-			$unit_price = $qty > 0 ? $total / $qty : 0;
+			$qty        = abs( (float) $item->get_quantity() );
+			$subtotal = abs( (float) $item->get_subtotal() );
+			$subtotal_tax = abs( (float) $item->get_subtotal_tax() );
+			$total = abs( (float) $item->get_total() );
+			$total_tax = abs( (float) $item->get_total_tax() );
+			if ( $subtotal <= 0 ) {
+				$subtotal = $total;
+				$subtotal_tax = $total_tax;
+			}
 			$line = array(
 				'product_id' => $product_id,
 				'qty'        => $qty,
-				'price'      => wc_format_decimal( $unit_price, 2 ),
 			);
 			if ( 'pass_taxes' === $tax_mode ) {
-				$line['tax'] = wc_format_decimal( (float) $item->get_total_tax(), 2 );
+				$unit_price = $qty > 0 ? $total / $qty : 0.0;
+				$line['price'] = wc_format_decimal( $unit_price, 2 );
+				$line['vat'] = wc_format_decimal( $total_tax, 2 );
+			} else {
+				$gross_subtotal = $subtotal + $subtotal_tax;
+				$gross_total = $total + $total_tax;
+				$unit_price = $qty > 0 ? $gross_subtotal / $qty : 0.0;
+				$line['price_with_vat'] = wc_format_decimal( $unit_price, 2 );
+				if ( $gross_subtotal > $gross_total && $gross_subtotal > 0 ) {
+					$line['discount'] = wc_format_decimal( ( ( $gross_subtotal - $gross_total ) / $gross_subtotal ) * 100, 4 );
+				}
+			}
+			$vat_codes = $this->resolve_product_vat_codes( $product );
+			if ( ! empty( $vat_codes ) ) {
+				$line['vat_code'] = $vat_codes;
+			}
+			$lines[] = $line;
+		}
+
+		foreach ( $refund->get_items( 'shipping' ) as $item ) {
+			$total = abs( (float) $item->get_total() );
+			if ( $total <= 0 ) {
+				continue;
+			}
+			$product_id = (int) get_option( 'robolabs_wc_shipping_product_id', 0 );
+			if ( ! $product_id ) {
+				$this->last_error_message = __( 'Missing RoboLabs shipping product for refunded shipping line.', 'robolabs-woocommerce' );
+				return array();
+			}
+			$line = array(
+				'product_id'  => $product_id,
+				'qty'         => 1,
+				'description' => $item->get_name(),
+			);
+			if ( 'pass_taxes' === $tax_mode ) {
+				$line['price'] = wc_format_decimal( $total, 2 );
+				$line['vat'] = wc_format_decimal( abs( (float) $item->get_total_tax() ), 2 );
+			} else {
+				$line['price_with_vat'] = wc_format_decimal( $total + abs( (float) $item->get_total_tax() ), 2 );
+			}
+			$vat_codes = $this->settings->get_default_vat_codes();
+			if ( ! empty( $vat_codes ) ) {
+				$line['vat_code'] = $vat_codes;
+			}
+			$lines[] = $line;
+		}
+
+		foreach ( $refund->get_items( 'fee' ) as $item ) {
+			$total = abs( (float) $item->get_total() );
+			if ( $total <= 0 ) {
+				continue;
+			}
+			$product_id = (int) get_option( 'robolabs_wc_fee_product_id', 0 );
+			if ( ! $product_id ) {
+				$this->last_error_message = __( 'Missing RoboLabs fee product for refunded fee line.', 'robolabs-woocommerce' );
+				return array();
+			}
+			$line = array(
+				'product_id'  => $product_id,
+				'qty'         => 1,
+				'description' => $item->get_name(),
+			);
+			if ( 'pass_taxes' === $tax_mode ) {
+				$line['price'] = wc_format_decimal( $total, 2 );
+				$line['vat'] = wc_format_decimal( abs( (float) $item->get_total_tax() ), 2 );
+			} else {
+				$line['price_with_vat'] = wc_format_decimal( $total + abs( (float) $item->get_total_tax() ), 2 );
+			}
+			$vat_codes = $this->settings->get_default_vat_codes();
+			if ( ! empty( $vat_codes ) ) {
+				$line['vat_code'] = $vat_codes;
 			}
 			$lines[] = $line;
 		}
 
 		return $lines;
+	}
+
+	private function resolve_product_vat_codes( WC_Product $product ): array {
+		$meta_keys = array(
+			'_robolabs_vat_code',
+			'robolabs_vat_code',
+		);
+
+		foreach ( $meta_keys as $meta_key ) {
+			$codes = $this->normalize_codes( $product->get_meta( $meta_key, true ) );
+			if ( ! empty( $codes ) ) {
+				return $codes;
+			}
+		}
+
+		return $this->settings->get_default_vat_codes();
+	}
+
+	private function normalize_codes( $raw ): array {
+		if ( is_array( $raw ) ) {
+			$raw = implode( ',', array_map( 'strval', $raw ) );
+		}
+
+		$parts = preg_split( '/[\s,]+/', strtoupper( (string) $raw ) );
+		if ( ! is_array( $parts ) ) {
+			return array();
+		}
+
+		$codes = array();
+		foreach ( $parts as $part ) {
+			$code = preg_replace( '/[^A-Z0-9_-]/', '', sanitize_text_field( $part ) );
+			if ( '' !== $code ) {
+				$codes[] = $code;
+			}
+		}
+
+		return array_values( array_unique( $codes ) );
 	}
 
 	private function mark_manual_required( WC_Order $order, string $message ): void {
@@ -158,18 +288,6 @@ final class RoboLabs_WC_Sync_Refund {
 		$order->update_meta_data( '_robolabs_last_sync_at', gmdate( 'c' ) );
 		$order->save();
 		$this->logger->error( 'Refund sync failed', array( 'order_id' => $order->get_id(), 'error' => $message ) );
-	}
-
-	private function build_confirm_payload( WC_Order_Refund $refund ): array {
-		$subtotal = (float) $refund->get_subtotal();
-		$tax      = (float) $refund->get_total_tax();
-		$total    = (float) $refund->get_total();
-
-		return array(
-			'subtotal' => wc_format_decimal( abs( $subtotal ), 2 ),
-			'tax'      => wc_format_decimal( abs( $tax ), 2 ),
-			'total'    => wc_format_decimal( abs( $total ), 2 ),
-		);
 	}
 
 	private function maybe_schedule_retry( WC_Order $order, ?int $code, int $refund_id ): bool {
@@ -201,11 +319,44 @@ final class RoboLabs_WC_Sync_Refund {
 				continue;
 			}
 			$response = $this->api_client->get( 'invoice/find', array( $field => $value ) );
-			if ( $response['success'] && ! empty( $response['data']['data'][0] ) ) {
-				return $response['data']['data'][0];
+			$items = $this->api_client->get_result_items( $response );
+			if ( $response['success'] && ! empty( $items[0] ) ) {
+				return $items[0];
 			}
 		}
 
 		return null;
+	}
+
+	private function find_invoice_by_external_id( string $external_id ): ?array {
+		if ( '' === $external_id ) {
+			return null;
+		}
+
+		$response = $this->api_client->get( 'invoice/' . rawurlencode( $external_id ) );
+		if ( ! $response['success'] ) {
+			return null;
+		}
+
+		$invoice = $this->api_client->get_result( $response );
+		return ! empty( $invoice['id'] ) ? $invoice : null;
+	}
+
+	private function create_credit_invoice( array $payload ): array {
+		$response = $this->api_client->post( 'invoice', $payload );
+		if ( $response['success'] || empty( $payload['number'] ) || ! $this->api_client->should_retry_without_number( $response ) ) {
+			return $response;
+		}
+
+		$retry_payload = $payload;
+		unset( $retry_payload['number'] );
+		$this->logger->info(
+			'Retrying credit note create without explicit number',
+			array(
+				'external_id' => $payload['external_id'] ?? '',
+			)
+		);
+
+		return $this->api_client->post( 'invoice', $retry_payload );
 	}
 }

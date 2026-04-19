@@ -4,7 +4,7 @@ Tags: woocommerce, invoicing, integration, accounting
 Requires at least: 6.0
 Tested up to: 6.6
 Requires PHP: 8.0
-Stable tag: 1.0.0
+Stable tag: 1.0.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,7 +24,9 @@ Required settings:
 - Base URL (sandbox or production)
 - API Key
 - Journal ID
-- Default Product Category ID (categ_id)
+- Default Product Category ID (categ_id) compatible with the selected RoboLabs product type
+- RoboLabs Product Type (`product`, `service`, or `consu`)
+- Default VAT Code(s) used when the plugin creates RoboLabs products and invoice lines (for example `PVM1`)
 - Invoice type and credit note invoice type (ex: out_invoice / out_refund)
 
 Optional settings:
@@ -48,7 +50,8 @@ Optional settings:
 
 == Troubleshooting ==
 - 401/403: Check API key and permissions.
-- Missing categ_id: Ensure Default Product Category ID is configured.
+- Missing or incompatible categ_id: Ensure Default Product Category ID is configured and compatible with the selected RoboLabs Product Type. If RoboLabs returns category `type: services`, set Product Type to `service`.
+- Missing VAT code: Ensure Default VAT Code(s) is configured for product creation and invoice lines when the RoboLabs company is registered as a VAT payer.
 - Missing journal_id: Set Default Journal ID in settings.
 - Job polling: If API returns job_id, Action Scheduler will poll /apiJob/{id}.
 - Rate limit: 429 responses are logged and job retries will handle backoff.

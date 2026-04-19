@@ -32,7 +32,7 @@ final class RoboLabs_WC_Plugin {
 		$this->sync_order  = new RoboLabs_WC_Sync_Order( $this->settings, $this->api_client, $this->logger, $this->mappers );
 		$this->sync_refund = new RoboLabs_WC_Sync_Refund( $this->settings, $this->api_client, $this->logger, $this->mappers );
 		$this->jobs        = new RoboLabs_WC_Jobs( $this->settings, $this->logger, $this->sync_order, $this->sync_refund, $this->api_client );
-		$this->admin       = new RoboLabs_WC_Admin( $this->settings, $this->logger, $this->jobs );
+		$this->admin       = new RoboLabs_WC_Admin( $this->settings, $this->logger, $this->jobs, $this->sync_order );
 		$this->hooks();
 	}
 

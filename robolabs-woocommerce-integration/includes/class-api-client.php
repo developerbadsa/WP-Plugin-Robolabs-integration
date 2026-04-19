@@ -35,7 +35,7 @@ final class RoboLabs_WC_Api_Client {
 		$headers = array(
 			'X-API-KEY'           => $this->settings->get_api_key(),
 			'Accept'              => 'application/json',
-			'ACCEPT-LANGUAGE'     => $this->settings->get( 'language', 'en_US' ),
+			'ACCEPT-LANGUAGE'     => $this->settings->get_partner_language_code(),
 			'EXECUTE_IMMEDIATELY' => $this->settings->is_execute_immediately() ? 'true' : 'false',
 		);
 		unset( $headers['Authorization'] );
@@ -68,11 +68,18 @@ final class RoboLabs_WC_Api_Client {
 			);
 		}
 
-		$code = wp_remote_retrieve_response_code( $response );
+		$code = (int) wp_remote_retrieve_response_code( $response );
 		$body_raw = wp_remote_retrieve_body( $response );
 		$data = json_decode( $body_raw, true );
 
-		$this->logger->info( 'RoboLabs API response', array( 'code' => $code, 'body' => $data ) );
+		$log_context = array(
+			'code' => $code,
+			'body' => $data,
+		);
+		if ( null === $data && '' !== $body_raw ) {
+			$log_context['body_raw'] = $body_raw;
+		}
+		$this->logger->info( 'RoboLabs API response', $log_context );
 
 		if ( 429 === $code ) {
 			$retry_after = (int) wp_remote_retrieve_header( $response, 'Retry-After' );
@@ -101,19 +108,92 @@ final class RoboLabs_WC_Api_Client {
 		);
 	}
 
+	public function get_response_data( array $response ): array {
+		$data = $response['data'] ?? array();
+		return is_array( $data ) ? $data : array();
+	}
+
+	public function get_result( array $response ): array {
+		$data = $this->get_response_data( $response );
+		if ( isset( $data['result'] ) && is_array( $data['result'] ) ) {
+			return $data['result'];
+		}
+
+		return $data;
+	}
+
+	public function get_result_items( array $response ): array {
+		$result = $this->get_result( $response );
+		if ( isset( $result['data'] ) && is_array( $result['data'] ) ) {
+			return array_values( $result['data'] );
+		}
+
+		return array();
+	}
+
+	public function get_job_id( array $response ): ?int {
+		$data = $this->get_response_data( $response );
+		if ( isset( $data['job_id'] ) && is_numeric( $data['job_id'] ) ) {
+			return (int) $data['job_id'];
+		}
+
+		return null;
+	}
+
+	public function should_retry_without_number( array $response ): bool {
+		$error = strtolower( (string) ( $response['error'] ?? '' ) );
+		if ( '' === $error ) {
+			return false;
+		}
+
+		return false !== strpos( $error, 'automatic assignment of an invoice number' )
+			|| ( false !== strpos( $error, 'do not add' ) && false !== strpos( $error, 'number' ) );
+	}
+
 	private function extract_error_message( $data, string $body_raw ): string {
 		if ( is_array( $data ) ) {
-			if ( isset( $data['error']['message'] ) ) {
-				return (string) $data['error']['message'];
+			foreach ( array( 'message', 'detail', 'response_message' ) as $key ) {
+				if ( isset( $data[ $key ] ) && is_string( $data[ $key ] ) ) {
+					return $data[ $key ];
+				}
 			}
-			if ( isset( $data['message'] ) ) {
-				return (string) $data['message'];
+
+			if ( isset( $data['error'] ) ) {
+				if ( is_string( $data['error'] ) ) {
+					return $data['error'];
+				}
+				if ( is_array( $data['error'] ) ) {
+					foreach ( array( 'message', 'detail', 'data' ) as $key ) {
+						if ( isset( $data['error'][ $key ] ) && is_string( $data['error'][ $key ] ) ) {
+							return $data['error'][ $key ];
+						}
+					}
+				}
 			}
+
+			if ( isset( $data['errors'] ) && is_array( $data['errors'] ) ) {
+				$messages = array();
+				foreach ( $data['errors'] as $error ) {
+					if ( is_string( $error ) ) {
+						$messages[] = $error;
+					} elseif ( is_array( $error ) ) {
+						foreach ( array( 'message', 'detail' ) as $key ) {
+							if ( isset( $error[ $key ] ) && is_string( $error[ $key ] ) ) {
+								$messages[] = $error[ $key ];
+							}
+						}
+					}
+				}
+				if ( ! empty( $messages ) ) {
+					return implode( '; ', array_unique( $messages ) );
+				}
+			}
+
 			if ( isset( $data['result'] ) && is_string( $data['result'] ) ) {
 				return $data['result'];
 			}
 		}
 
-		return $body_raw;
+		return '' !== $body_raw ? $body_raw : 'RoboLabs API request failed';
 	}
 }

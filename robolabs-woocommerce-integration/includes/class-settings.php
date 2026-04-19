@@ -13,8 +13,10 @@ final class RoboLabs_WC_Settings {
 		'api_key'             => '',
 		'language'            => 'en_US',
 		'execute_immediately' => 'yes',
-		'journal_id'          => '',
-		'categ_id'            => '',
+		'journal_id'          => '22',
+		'categ_id'            => '16',
+		'product_type'        => 'product',
+		'default_vat_code'    => 'PVM1',
 		'invoice_trigger'     => 'order_created',
 		'invoice_type'        => 'out_invoice',
 		'credit_invoice_type' => 'out_refund',
@@ -30,7 +32,15 @@ final class RoboLabs_WC_Settings {
 			$settings = array();
 		}
 
-		return wp_parse_args( $settings, $this->defaults );
+		$settings = wp_parse_args( $settings, $this->defaults );
+
+		foreach ( array( 'journal_id', 'categ_id', 'default_vat_code' ) as $required_key ) {
+			if ( ! isset( $settings[ $required_key ] ) || '' === trim( (string) $settings[ $required_key ] ) ) {
+				$settings[ $required_key ] = $this->defaults[ $required_key ];
+			}
+		}
+
+		return $settings;
 	}
 
 	public function get( string $key, $default = null ) {
@@ -83,6 +93,27 @@ final class RoboLabs_WC_Settings {
 		return (int) $this->get( 'lock_ttl', 300 );
 	}
 
+	public function get_default_vat_codes(): array {
+		return $this->normalize_code_list( (string) $this->get( 'default_vat_code', '' ) );
+	}
+
+	public function get_product_type(): string {
+		return $this->sanitize_product_type( $this->get( 'product_type', 'product' ) );
+	}
+
+	public function get_partner_language_code(): string {
+		$language = strtolower( (string) $this->get( 'language', 'en_US' ) );
+		if ( 0 === strpos( $language, 'lt' ) ) {
+			return 'lt_LT';
+		}
+
+		return 'en_US';
+	}
+
+	public function get_invoice_language_code(): string {
+		return 'lt_LT' === $this->get_partner_language_code() ? 'LT' : 'EN';
+	}
+
 	public function register(): void {
 		register_setting(
 			'robolabs_wc_settings',
@@ -103,10 +134,12 @@ final class RoboLabs_WC_Settings {
 			$submitted_key = sanitize_text_field( $settings['api_key'] ?? '' );
 			$clean['api_key'] = '' !== $submitted_key ? $submitted_key : ( $existing['api_key'] ?? '' );
 		}
-		$clean['language']            = sanitize_text_field( $settings['language'] ?? 'en_US' );
+		$clean['language']            = $this->sanitize_language( $settings['language'] ?? 'en_US' );
 		$clean['execute_immediately'] = isset( $settings['execute_immediately'] ) ? 'yes' : 'no';
-		$clean['journal_id']          = sanitize_text_field( $settings['journal_id'] ?? '' );
-		$clean['categ_id']            = sanitize_text_field( $settings['categ_id'] ?? '' );
+		$clean['journal_id']          = $this->sanitize_required_default( $settings['journal_id'] ?? '', 'journal_id' );
+		$clean['categ_id']            = $this->sanitize_required_default( $settings['categ_id'] ?? '', 'categ_id' );
+		$clean['product_type']        = $this->sanitize_product_type( $settings['product_type'] ?? 'product' );
+		$clean['default_vat_code']    = $this->sanitize_default_vat_code( $settings['default_vat_code'] ?? '' );
 		$clean['invoice_trigger']     = sanitize_text_field( $settings['invoice_trigger'] ?? 'order_created' );
 		$clean['invoice_type']        = sanitize_text_field( $settings['invoice_type'] ?? 'out_invoice' );
 		$clean['credit_invoice_type'] = sanitize_text_field( $settings['credit_invoice_type'] ?? 'out_refund' );
@@ -115,18 +148,30 @@ final class RoboLabs_WC_Settings {
 		$clean['max_attempts']        = absint( $settings['max_attempts'] ?? 4 );
 		$clean['lock_ttl']            = absint( $settings['lock_ttl'] ?? 300 );
 
+		if (
+			(string) ( $existing['categ_id'] ?? '' ) !== (string) $clean['categ_id']
+			|| (string) ( $existing['product_type'] ?? $this->defaults['product_type'] ) !== (string) $clean['product_type']
+			|| (string) ( $existing['default_vat_code'] ?? '' ) !== (string) $clean['default_vat_code']
+		) {
+			delete_option( 'robolabs_wc_shipping_product_id' );
+			delete_option( 'robolabs_wc_fee_product_id' );
+			delete_option( 'robolabs_wc_discount_product_id' );
+		}
+
 		return $clean;
 	}
 
-	public function render_settings_page(): void {
+	public function render_settings_page( bool $include_wrap = true ): void {
 		$settings = $this->get_settings();
 		$api_key  = $this->get_api_key();
 		$api_key_masked = $api_key ? substr( $api_key, 0, 4 ) . str_repeat( '*', max( 0, strlen( $api_key ) - 8 ) ) . substr( $api_key, -4 ) : '';
 		$api_key_constant = defined( 'ROBOLABS_API_KEY' ) && ROBOLABS_API_KEY;
 		$base_url_constant = defined( 'ROBOLABS_API_BASE' ) && ROBOLABS_API_BASE;
 		?>
-		<div class="wrap">
-			<h1><?php esc_html_e( 'RoboLabs WooCommerce Integration', 'robolabs-woocommerce' ); ?></h1>
+		<?php if ( $include_wrap ) : ?>
+			<div class="wrap">
+				<h1><?php esc_html_e( 'RoboLabs WooCommerce Integration', 'robolabs-woocommerce' ); ?></h1>
+		<?php endif; ?>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'robolabs_wc_settings' ); ?>
 				<table class="form-table" role="presentation">
@@ -173,11 +218,35 @@ final class RoboLabs_WC_Settings {
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Default Journal ID', 'robolabs-woocommerce' ); ?></th>
-						<td><input type="text" class="regular-text" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[journal_id]" value="<?php echo esc_attr( $settings['journal_id'] ); ?>"></td>
+						<td>
+							<input type="text" class="regular-text" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[journal_id]" value="<?php echo esc_attr( $settings['journal_id'] ); ?>">
+							<p class="description"><?php esc_html_e( 'Required for invoice and credit note creation.', 'robolabs-woocommerce' ); ?></p>
+						</td>
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Default Product Category ID', 'robolabs-woocommerce' ); ?></th>
-						<td><input type="text" class="regular-text" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[categ_id]" value="<?php echo esc_attr( $settings['categ_id'] ); ?>"></td>
+						<td>
+							<input type="text" class="regular-text" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[categ_id]" value="<?php echo esc_attr( $settings['categ_id'] ); ?>">
+							<p class="description"><?php esc_html_e( 'Required when the plugin creates missing RoboLabs products, shipping items, or fee items. Use a RoboLabs product category compatible with the selected RoboLabs product type.', 'robolabs-woocommerce' ); ?></p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'RoboLabs Product Type', 'robolabs-woocommerce' ); ?></th>
+						<td>
+							<select name="<?php echo esc_attr( self::OPTION_KEY ); ?>[product_type]">
+								<option value="product" <?php selected( 'product', $settings['product_type'] ); ?>><?php esc_html_e( 'Product (product)', 'robolabs-woocommerce' ); ?></option>
+								<option value="service" <?php selected( 'service', $settings['product_type'] ); ?>><?php esc_html_e( 'Service (service)', 'robolabs-woocommerce' ); ?></option>
+								<option value="consu" <?php selected( 'consu', $settings['product_type'] ); ?>><?php esc_html_e( 'Consumable (consu)', 'robolabs-woocommerce' ); ?></option>
+							</select>
+							<p class="description"><?php esc_html_e( 'Docs allow product, service, or consu. If productCategory/find returns type services for your chosen category, use Service.', 'robolabs-woocommerce' ); ?></p>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row"><?php esc_html_e( 'Default VAT Code(s)', 'robolabs-woocommerce' ); ?></th>
+						<td>
+							<input type="text" class="regular-text" name="<?php echo esc_attr( self::OPTION_KEY ); ?>[default_vat_code]" value="<?php echo esc_attr( $settings['default_vat_code'] ); ?>">
+							<p class="description"><?php esc_html_e( 'Required for RoboLabs product creation and invoice lines when the RoboLabs company is registered as a VAT payer. Use comma-separated codes, for example: PVM1', 'robolabs-woocommerce' ); ?></p>
+						</td>
 					</tr>
 					<tr>
 						<th scope="row"><?php esc_html_e( 'Invoice Trigger', 'robolabs-woocommerce' ); ?></th>
@@ -224,7 +293,63 @@ final class RoboLabs_WC_Settings {
 				</table>
 				<?php submit_button(); ?>
 			</form>
-		</div>
+		<?php if ( $include_wrap ) : ?>
+			</div>
+		<?php endif; ?>
 		<?php
+	}
+
+	private function normalize_code_list( string $raw ): array {
+		$parts = preg_split( '/[\s,]+/', strtoupper( $raw ) );
+		if ( ! is_array( $parts ) ) {
+			return array();
+		}
+
+		$codes = array();
+		foreach ( $parts as $part ) {
+			$code = sanitize_text_field( $part );
+			$code = preg_replace( '/[^A-Z0-9_-]/', '', $code );
+			if ( '' !== $code ) {
+				$codes[] = $code;
+			}
+		}
+
+		return array_values( array_unique( $codes ) );
+	}
+
+	private function sanitize_required_default( $value, string $key ): string {
+		$clean = sanitize_text_field( (string) $value );
+		if ( '' === $clean ) {
+			return (string) $this->defaults[ $key ];
+		}
+
+		return $clean;
+	}
+
+	private function sanitize_default_vat_code( $value ): string {
+		$codes = $this->normalize_code_list( (string) $value );
+		if ( empty( $codes ) ) {
+			$codes = $this->normalize_code_list( (string) $this->defaults['default_vat_code'] );
+		}
+
+		return implode( ',', $codes );
+	}
+
+	private function sanitize_language( $value ): string {
+		$value = strtolower( sanitize_text_field( (string) $value ) );
+		if ( 0 === strpos( $value, 'lt' ) ) {
+			return 'lt_LT';
+		}
+
+		return 'en_US';
+	}
+
+	private function sanitize_product_type( $value ): string {
+		$value = strtolower( sanitize_text_field( (string) $value ) );
+		if ( in_array( $value, array( 'product', 'service', 'consu' ), true ) ) {
+			return $value;
+		}
+
+		return 'product';
 	}
 }
